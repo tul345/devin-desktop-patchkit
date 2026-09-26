@@ -92,3 +92,21 @@ docs/
 ## License
 
 未附带许可证文件；如需开源发布，自行添加（例如 MIT）。
+
+## 发布到 GitHub
+
+```powershell
+winget install --id GitHub.cli -e     # 装 gh（一次性）
+gh auth login                         # 交互登录（一次性）
+.\scripts\publish.ps1                 # 建仓并推送
+.\scripts\publish.ps1 -Private        # 私有仓库
+```
+
+若不想装 gh：在 GitHub 网页新建空仓库，然后
+
+```powershell
+git remote add origin https://github.com/<你的账号>/devin-desktop-patchkit.git
+git push -u origin master
+```
+
+（HTTPS 首次推送会弹出 Git Credential Manager 登录；SSH 需要先把公钥加到 GitHub。）

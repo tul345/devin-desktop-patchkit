@@ -61,7 +61,11 @@ def cmd_status(args) -> int:
     print("\n== 补丁状态 ==")
     bundles = load_bundles()
     for patch in PATCHES:
-        states = {b: _detect(bundles[b]["data"], patch["detect"]) for b, _ in patch["targets"]}
+        states = {}
+        for t in patch["targets"]:
+            b = t["bundle"]
+            data = bundles[b]["data"]
+            states[b] = _detect(data, t["detect"])
         print(f"  {patch['id']:<8} {patch['title']}")
         print("           " + "  ".join(f"{k}={v}" for k, v in states.items()))
     return 0
@@ -77,13 +81,14 @@ def cmd_apply(args) -> int:
     plan: dict[str, list[tuple[bytes, bytes, str]]] = {}
     notes: list[str] = []
     for patch in selected:
-        for bundle, candidates in patch["targets"]:
+        for t in patch["targets"]:
+            bundle, candidates = t["bundle"], t["cands"]
             data = config.BUNDLE_MAP[bundle][0]
             if not data.exists():
                 notes.append(f"{bundle}: 文件不存在，跳过")
                 continue
             blob = P.read(data)
-            if patch["detect"] in blob:
+            if t["detect"] in blob:
                 notes.append(f"{patch['id']}/{bundle}: 已打，跳过")
                 continue
             hit = None
@@ -154,9 +159,9 @@ def cmd_verify(args) -> int:
             bad += 1
         print(f"  {key:<5} {flag:<5} parse={msg:<26} checksum={cks}")
     for patch in PATCHES:
-        for bundle, _ in patch["targets"]:
-            data = bundles[bundle]["data"]
-            if data is not None and patch["detect"] not in data:
+        for t in patch["targets"]:
+            bundle, data = t["bundle"], bundles[t["bundle"]]["data"]
+            if data is not None and t["detect"] not in data:
                 print(f"  {patch['id']}/{bundle}: 未应用"); bad += 1
     print("全部通过" if not bad else f"存在 {bad} 项问题")
     return 1 if bad else 0

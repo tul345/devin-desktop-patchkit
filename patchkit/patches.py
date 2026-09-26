@@ -45,7 +45,8 @@ def _wrapper(key: str) -> bytes:
         + 'let sg_=' + arr + '.map(x=>x.sessionId).join("|"),now_=Date.now();'
         + 'if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=' + arr + ';Z.sig=sg_;Z.ts=now_}return Z.snap'
     )
-    return (decl + body).encode("utf-8")
+    # decl 以分号结尾，拼接时必须去掉，否则会写成 "t=[];,Z=..." 这种语法错误
+    return (decl.rstrip(";") + body).encode("utf-8")
 
 
 def _sidebar_candidates(key: str) -> list[tuple[bytes, bytes]]:
@@ -61,12 +62,23 @@ def _sidebar_candidates(key: str) -> list[tuple[bytes, bytes]]:
 # ---------------------------------------------------------------- 补丁 1：侧栏数据源
 
 SIDEBAR_DETECT = b"__JB_STB"
-SIDEBAR_TARGETS = [(bundle, _sidebar_candidates(key))
-                   for key, bundles in _SIDEBAR_BUNDLES.items() for bundle in bundles]
+
+
+def _mk_targets(detect_of, cands_of) -> list[dict]:
+    out = []
+    for key, bundles in _SIDEBAR_BUNDLES.items():
+        for bundle in bundles:
+            out.append({"bundle": bundle, "detect": detect_of(key), "cands": cands_of(key)})
+    return out
+
+
+SIDEBAR_TARGETS = _mk_targets(lambda k: SIDEBAR_DETECT, _sidebar_candidates)
 
 # ---------------------------------------------------------------- 补丁 2：噪音行
 
-NOISE_DETECT = b'userMessageCount"]>0'
+def _noise_detect(key: str) -> bytes:
+    """detect 必须精确到"追加的判定后缀"，否则应用自身代码里的同名字段会造成误判。"""
+    return _noise_new(key)[1:]          # 去掉开头的 '&'
 
 NOISE_OLD_CHAIN = {
     "chat": (b'&&e._meta?.["cognition.ai/isArchived"]!==!0&&(0,eo9.getProposedByDevinId)(e._meta)===void 0'
@@ -95,17 +107,17 @@ def _noise_candidates(key: str) -> list[tuple[bytes, bytes]]:
     ]
 
 
-NOISE_TARGETS = [(bundle, _noise_candidates(key))
-                 for key, bundles in _SIDEBAR_BUNDLES.items() for bundle in bundles]
+NOISE_TARGETS = _mk_targets(_noise_detect, _noise_candidates)
 
 # ---------------------------------------------------------------- 补丁 3：放开上限
 
 LIMITS_DETECT = b"rzq(x,1e9"
 LIMITS_TARGETS = [
-    ("chat", [(b"rzq(x,p,m,{groupSessionLimits:I", b"rzq(x,1e9,m,{groupSessionLimits:I"),
-              (b"J=S+R,H=", b"J=1e9,H=")]),
-    ("exa", [(b"rzq(x,p,m,{groupSessionLimits:I", b"rzq(x,1e9,m,{groupSessionLimits:I"),
-             (b"J=S+R,H=", b"J=1e9,H=")]),
+    {"bundle": b,
+     "detect": LIMITS_DETECT,
+     "cands": [(b"rzq(x,p,m,{groupSessionLimits:I", b"rzq(x,1e9,m,{groupSessionLimits:I"),
+               (b"J=S+R,H=", b"J=1e9,H=")]}
+    for b in ("chat", "exa")
 ]
 
 # ---------------------------------------------------------------- 残片修复
@@ -135,9 +147,9 @@ def repair_residue(data: bytes) -> tuple[bool, bytes, str]:
 
 PATCHES = [
     {"id": "sidebar", "title": "侧栏会话数据源：全量 + 粘性快照（开局即全量、不闪不倒退）",
-     "detect": SIDEBAR_DETECT, "targets": SIDEBAR_TARGETS},
+     "targets": SIDEBAR_TARGETS},
     {"id": "noise", "title": "隐藏空会话噪音行（无标题且无消息 → 不渲染）",
-     "detect": NOISE_DETECT, "targets": NOISE_TARGETS},
+     "targets": NOISE_TARGETS},
     {"id": "limits", "title": "放开侧栏渲染上限（每组上限 / 总量上限）",
-     "detect": LIMITS_DETECT, "targets": LIMITS_TARGETS},
+     "targets": LIMITS_TARGETS},
 ]
