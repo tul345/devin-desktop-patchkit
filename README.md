@@ -29,7 +29,7 @@ python devin-patchkit.py rollback               # 从最近一次备份回滚
 
 ```powershell
 python devin-patchkit.py repair --dry-run                      # 只修白屏残片
-python devin-patchkit.py pyright --workspace "D:\文档\CTF-AI专项赛区" --extra 工具库/源码 工具库/external
+python devin-patchkit.py pyright --workspace "D:\path\to\workspace" --extra 工具库/源码 工具库/external
 python devin-patchkit.py shim                                  # 给 ACP shim 打预热 + 重试
 ```
 
