@@ -9,6 +9,7 @@
 | 打开就是白屏 | 历史补丁在 `isRenderable` 处重复插入判定链，留下 `}&&…` 语法残片，整个 UI bundle 解析失败 | `repair` |
 | 侧栏出现很多 "Devin Local session" 行 | 该文案是**界面兜底**，数据里 `title` 其实是 `undefined`；补丁却拿它做字符串比较，过滤条件永不成立 | `noise` |
 | 会话数量一直变、慢慢才补齐 | 补丁把数据源换成"整库遍历"，而库会随同步进/出；侧栏组件又有"每组上限 + 总量上限（默认 25）" | `sidebar` + `limits` |
+| 归档/删除点了没反应 | v1.0.0 的 `sidebar` 用了跨帧粘性缓存，会把已归档/已删除的旧会话对象重新加回列表并持久化 | `sidebar`（v1.1.0 已移除缓存） |
 | python 语言服务告警 `Enumeration of workspace source files is taking longer than 10 seconds` | 工作区里存在十几万文件的工具库目录，未被 `pyrightconfig.json` 排除 | `pyright` |
 | 侧栏先显示几十条、几分钟后才补全 | ACP shim 冷启动读库失败时把**未展开的短列表**交给了 IDE | `shim` |
 
@@ -37,7 +38,7 @@ python devin-patchkit.py shim                                  # 给 ACP shim �
 
 ## 补丁清单
 
-- `sidebar`：侧栏会话数据源改为"应用已知全量 + 粘性 + 本地快照"。效果：开局即全量、行不会消失、最多每 45 秒批量刷新一次。
+- `sidebar`：侧栏会话数据源改为"应用已知全量"。效果：开局即全量；列表每帧从 store 现值重建（**不缓存对象**，所以归档/删除立即生效）；最多每 45 秒节流接受一次新列表。
 - `noise`：无标题且无消息的空会话不渲染（判定 `title || summary || userMessageCount > 0`）。
 - `limits`：放开侧栏组件的"每组上限 `p`"与"总量上限 `J=S+R`"。
 - `repair`：清除语法残片（白屏），修复前先做一次语法校验，不通过就拒绝写入。

@@ -30,38 +30,57 @@ _SIDEBAR_BUNDLES = {
 
 
 def _wrapper(key: str) -> bytes:
+    """生成侧栏数据源包装代码。
+
+    只做三件事：遍历 store 全量、过可见性判定、按 45 秒节流接受新列表。
+    关键：**不做任何跨帧缓存**——历史版本用 `Z.map` 做粘性缓存，导致
+    (1) 归档/删除会话后旧对象仍被重新加回列表，用户感觉"删不掉、归档无效"；
+    (2) 缓存永不清理，越积越多。这里彻底移除该机制。
+    """
     decl, arr, keep, _up, _sw = _VARIANTS[key]
     item = "r" if key == "chat" else "_e"
-    loop = ("for(let %s of %s.values()){if(%s&&%s(%s)){%s.push(%s);L.add(%s.sessionId);Z.map.set(%s.sessionId,%s)}}"
-            % (item, "e" if key == "chat" else "ae", item, keep, item, arr, item, item, item, item))
-    body = (
-        ',Z=(globalThis.__JB_STB||(globalThis.__JB_STB={snap:null,sig:"",ts:0,map:new Map()})),L=new Set();'
-        + loop
-        + 'if(!Z.ld){Z.ld=!0;try{const rw=localStorage.getItem("__JB_SESS");if(rw){const ar=JSON.parse(rw);'
-          'for(const so of ar){so&&so.sessionId&&Z.map.set(so.sessionId,so)}}}catch(_){}}'
-        + 'for(let[k_,v_]of Z.map){!L.has(k_)&&' + keep + '(v_)&&' + arr + '.push(v_)}'
-        + 'try{if(!Z.pAt||Date.now()-Z.pAt>60000){Z.pAt=Date.now();const pa=[];let pc=0;'
-          'for(const[,pv]of Z.map){pa.push(pv);if(++pc>=400)break}localStorage.setItem("__JB_SESS",JSON.stringify(pa))}}catch(_){}'
-        + 'let sg_=' + arr + '.map(x=>x.sessionId).join("|"),now_=Date.now();'
-        + 'if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=' + arr + ';Z.sig=sg_;Z.ts=now_}return Z.snap'
-    )
-    # decl 以分号结尾，拼接时必须去掉，否则会写成 "t=[];,Z=..." 这种语法错误
-    return (decl.rstrip(";") + body).encode("utf-8")
+    src = "e" if key == "chat" else "ae"
+    return (
+        decl.rstrip(";")
+        + ",Z=(globalThis.__JB_STB||(globalThis.__JB_STB={snap:null,sig:\"\",ts:0}));"
+          "for(let " + item + " of " + src + ".values()){if(" + item + "&&" + keep + "(" + item + "))" + arr + ".push(" + item + ")}"
+          # 一次性迁移：清掉旧版本留下的粘性缓存/快照，避免它们继续复活已删除的会话
+          "try{const __ph=(globalThis.__JB_STB||{}).map,__ps=localStorage.getItem(\"__JB_SESS\");"
+          "if(__ph&&__ph.clear)__ph.clear();if(__ps)localStorage.removeItem(\"__JB_SESS\")}catch(_){}"
+          "let sg_=" + arr + ".map(x=>x.sessionId).join(\"|\"),now_=Date.now();"
+          "if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=" + arr + ";Z.sig=sg_;Z.ts=now_}return Z.snap"
+    ).encode("utf-8")
+
+
+# 历史版本（v1.0.0）生成过的包装代码：内置粘性缓存 Z.map，会导致归档/删除后会话被复活。
+# 迁移：把它整体替换成新版本（无缓存 + 清理旧缓存）。
+LEGACY_WRAPPERS = {
+    'chat': b'let e=tfe(f),t=[],Z=(globalThis.__JB_STB||(globalThis.__JB_STB={snap:null,sig:"",ts:0,map:new Map()})),L=new Set();for(let r of e.values()){if(r&&C(r)){t.push(r);L.add(r.sessionId);Z.map.set(r.sessionId,r)}}if(!Z.ld){Z.ld=!0;try{const rw=localStorage.getItem("__JB_SESS");if(rw){const ar=JSON.parse(rw);for(const so of ar){so&&so.sessionId&&Z.map.set(so.sessionId,so)}}}catch(_){}}for(let[k_,v_]of Z.map){!L.has(k_)&&C(v_)&&t.push(v_)}try{if(!Z.pAt||Date.now()-Z.pAt>60000){Z.pAt=Date.now();const pa=[];let pc=0;for(const[,pv]of Z.map){pa.push(pv);if(++pc>=400)break}localStorage.setItem("__JB_SESS",JSON.stringify(pa))}}catch(_){}let sg_=t.map(x=>x.sessionId).join("|"),now_=Date.now();if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=t;Z.sig=sg_;Z.ts=now_}return Z.snap',
+    'main': b'let ae=QYn(X),he=[],Z=(globalThis.__JB_STB||(globalThis.__JB_STB={snap:null,sig:"",ts:0,map:new Map()})),L=new Set();for(let _e of ae.values()){if(_e&&ee(_e)){he.push(_e);L.add(_e.sessionId);Z.map.set(_e.sessionId,_e)}}if(!Z.ld){Z.ld=!0;try{const rw=localStorage.getItem("__JB_SESS");if(rw){const ar=JSON.parse(rw);for(const so of ar){so&&so.sessionId&&Z.map.set(so.sessionId,so)}}}catch(_){}}for(let[k_,v_]of Z.map){!L.has(k_)&&ee(v_)&&he.push(v_)}try{if(!Z.pAt||Date.now()-Z.pAt>60000){Z.pAt=Date.now();const pa=[];let pc=0;for(const[,pv]of Z.map){pa.push(pv);if(++pc>=400)break}localStorage.setItem("__JB_SESS",JSON.stringify(pa))}}catch(_){}let sg_=he.map(x=>x.sessionId).join("|"),now_=Date.now();if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=he;Z.sig=sg_;Z.ts=now_}return Z.snap',
+}
 
 
 def _sidebar_candidates(key: str) -> list[tuple[bytes, bytes]]:
+    """返回 (锚点, 新文本) 候选。锚点按特异性从高到低：
+    1) 历史版本的粘性缓存实现（迁移用）
+    2) 已改成"整库遍历"的中间态
+    3) 干净的上游实现
+    """
     decl, arr, _keep, up, sw = _VARIANTS[key]
     suffix = "return " + arr
     new = _wrapper(key)
-    return [
-        ((decl + up + suffix).encode("utf-8"), new),
-        ((decl + sw + suffix).encode("utf-8"), new),
-    ]
+    cands = []
+    legacy = LEGACY_WRAPPERS.get(key)
+    if legacy:
+        cands.append((legacy, new))
+    cands.append(((decl + sw + suffix).encode("utf-8"), new))
+    cands.append(((decl + up + suffix).encode("utf-8"), new))
+    return cands
 
 
 # ---------------------------------------------------------------- 补丁 1：侧栏数据源
 
-SIDEBAR_DETECT = b"__JB_STB"
+SIDEBAR_DETECT = b'localStorage.removeItem("__JB_SESS")'   # 仅新版本具备（含旧缓存清理）
 
 
 def _mk_targets(detect_of, cands_of) -> list[dict]:

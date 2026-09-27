@@ -11,13 +11,12 @@ from patchkit.patcher import replace_once    # noqa: E402
 
 
 def test_sidebar_applies_on_pristine():
-    """干净上游文本 → 应能被替换，且生成物是合法形状（含 __JB_STB、无 '=[];,'）。"""
+    """干净上游文本 → 应能被替换，且生成物是合法形状。"""
     for key in ("chat", "main"):
         decl, arr, _keep, up, _sw = PT._VARIANTS[key]
         pristine = (decl + up + "return " + arr).encode()
-        cands = PT._sidebar_candidates(key)
         hit = None
-        for old, new in cands:
+        for old, new in PT._sidebar_candidates(key):
             ok, out, _why = replace_once(pristine, old, new)
             if ok:
                 hit = out
@@ -26,6 +25,25 @@ def test_sidebar_applies_on_pristine():
         assert b"__JB_STB" in hit
         assert b"=[];," not in hit, "声明前缀多余分号（会写出语法错误）"
         assert hit.endswith(b"return Z.snap")
+        assert PT._wrapper(key) in hit
+        # 关键回归：不得再引入"会让归档/删除复活的"粘性缓存
+        assert b"Z.map" not in hit, "不得缓存会话对象（会导致归档/删除无效）"
+        assert b"removeItem" in hit, "必须清理旧版本的持久化快照"
+
+
+def test_sidebar_migrates_legacy_sticky_wrapper():
+    """线上历史版本（带 Z.map 粘性缓存）必须能被识别并迁移掉。"""
+    for key, legacy in PT.LEGACY_WRAPPERS.items():
+        blob = b"x;" + legacy + b";y"
+        hit = None
+        for old, new in PT._sidebar_candidates(key):
+            ok, out, _why = replace_once(blob, old, new)
+            if ok:
+                hit = out
+                break
+        assert hit, f"{key}: legacy 未命中"
+        assert b"Z.map" not in hit
+        assert PT.SIDEBAR_DETECT in hit
         assert PT._wrapper(key) in hit
 
 
