@@ -1,10 +1,25 @@
 """补丁定义（字节级）。
 
 三条独立补丁，各自幂等：
-  sidebar  —— 侧栏会话数据源换成"应用已知全量 + 粘性快照"，开局即全量、不闪不倒退
+
+  sidebar  —— 侧栏会话数据源：只用当前 store 现值构造列表
   noise    —— 无标题且无消息的空会话（会渲染成 "Devin Local session"）不显示
   limits   —— 放开侧栏组件的"每组上限"和"总量上限"（默认只渲染 25 条的那道闸门）
+
 另外提供 repair_residue()：修复历史补丁留下的语法残片（白屏根因）。
+
+sidebar 的三个版本（重要，别再踩）：
+
+  v1.0.0  用 globalThis.__JB_STB.map 记住"见过的会话"，下一帧把不在列表里的旧对象
+          重新加回列表并持久化到 localStorage。后果：归档/删除的会话被复活，
+          用户感觉"归档、删除点了没反应"。
+  v1.1.0  加了 45 秒节流并返回旧快照 Z.snap。后果：首帧 store 为空时把 [] 存进快照，
+          之后真实数据到达也被节流拦下；而 useMemo 依赖不变就不会重算，
+          于是侧栏永久空白、"加载圈不转"。
+  v1.2.0  只用当前 store 现值构造列表：不缓存、不节流、不落盘。
+          归档/删除立即生效；store 一变列表就跟着变。
+
+迁移：首次运行 v1.2.0 时会清掉旧版本遗留的内存缓存与 localStorage 快照。
 """
 from __future__ import annotations
 
@@ -13,8 +28,7 @@ import re
 # ---------------------------------------------------------------- 变体定义
 
 _VARIANTS = {
-    # key: (声明前缀, 累加数组, 判定函数, 上游遍历, 已打 P1 的遍历)
-    #      遍历模板里 {n} 是循环变量、{r} 是元素名
+    # key: (声明前缀, 累加数组, 可见性判定函数, 上游遍历(按分页 id 取), 整库遍历)
     "chat": ("let e=tfe(f),t=[];", "t", "C",
              "for(let n of s){let r=e.get(n);r&&C(r)&&t.push(r)}",
              "for(let r of e.values()){r&&C(r)&&t.push(r)}"),
@@ -28,59 +42,51 @@ _SIDEBAR_BUNDLES = {
     "main": ["main"],
 }
 
+# 生成代码里的迁移版本号：只有 v1.2.0 会写它
+_MIGRATION_KEY = "__zs.v=2"
+SIDEBAR_DETECT = _MIGRATION_KEY.encode()
+
 
 def _wrapper(key: str) -> bytes:
-    """生成侧栏数据源包装代码。
-
-    只做三件事：遍历 store 全量、过可见性判定、按 45 秒节流接受新列表。
-    关键：**不做任何跨帧缓存**——历史版本用 `Z.map` 做粘性缓存，导致
-    (1) 归档/删除会话后旧对象仍被重新加回列表，用户感觉"删不掉、归档无效"；
-    (2) 缓存永不清理，越积越多。这里彻底移除该机制。
-    """
+    """生成侧栏数据源包装代码（v1.2.0）：只用 store 现值，不缓存不节流。"""
     decl, arr, keep, _up, _sw = _VARIANTS[key]
     item = "r" if key == "chat" else "_e"
     src = "e" if key == "chat" else "ae"
     return (
         decl.rstrip(";")
-        + ",Z=(globalThis.__JB_STB||(globalThis.__JB_STB={snap:null,sig:\"\",ts:0}));"
-          "for(let " + item + " of " + src + ".values()){if(" + item + "&&" + keep + "(" + item + "))" + arr + ".push(" + item + ")}"
-          # 一次性迁移：清掉旧版本留下的粘性缓存/快照，避免它们继续复活已删除的会话
-          "try{const __ph=(globalThis.__JB_STB||{}).map,__ps=localStorage.getItem(\"__JB_SESS\");"
-          "if(__ph&&__ph.clear)__ph.clear();if(__ps)localStorage.removeItem(\"__JB_SESS\")}catch(_){}"
-          "let sg_=" + arr + ".map(x=>x.sessionId).join(\"|\"),now_=Date.now();"
-          "if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=" + arr + ";Z.sig=sg_;Z.ts=now_}return Z.snap"
+        + ",__zs=(globalThis.__JB_STB||(globalThis.__JB_STB={})),__z1=__zs.v;"
+          # 一次性迁移：清理旧版本的内存缓存与本地快照（它们会复活已删除的会话）
+          "if(__z1!==2){__zs.v=2;try{const __ph=__zs.map,__ps=localStorage.getItem(\"__JB_SESS\");"
+          "if(__ph&&__ph.clear)__ph.clear();if(__ps)localStorage.removeItem(\"__JB_SESS\")}catch(_){}}"
+          "for(let " + item + " of " + src + ".values()){if(" + item + "&&" + keep + "(" + item + "))"
+          + arr + ".push(" + item + ")}"
+          "return " + arr
     ).encode("utf-8")
 
 
-# 历史版本（v1.0.0）生成过的包装代码：内置粘性缓存 Z.map，会导致归档/删除后会话被复活。
-# 迁移：把它整体替换成新版本（无缓存 + 清理旧缓存）。
-LEGACY_WRAPPERS = {
-    'chat': b'let e=tfe(f),t=[],Z=(globalThis.__JB_STB||(globalThis.__JB_STB={snap:null,sig:"",ts:0,map:new Map()})),L=new Set();for(let r of e.values()){if(r&&C(r)){t.push(r);L.add(r.sessionId);Z.map.set(r.sessionId,r)}}if(!Z.ld){Z.ld=!0;try{const rw=localStorage.getItem("__JB_SESS");if(rw){const ar=JSON.parse(rw);for(const so of ar){so&&so.sessionId&&Z.map.set(so.sessionId,so)}}}catch(_){}}for(let[k_,v_]of Z.map){!L.has(k_)&&C(v_)&&t.push(v_)}try{if(!Z.pAt||Date.now()-Z.pAt>60000){Z.pAt=Date.now();const pa=[];let pc=0;for(const[,pv]of Z.map){pa.push(pv);if(++pc>=400)break}localStorage.setItem("__JB_SESS",JSON.stringify(pa))}}catch(_){}let sg_=t.map(x=>x.sessionId).join("|"),now_=Date.now();if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=t;Z.sig=sg_;Z.ts=now_}return Z.snap',
-    'main': b'let ae=QYn(X),he=[],Z=(globalThis.__JB_STB||(globalThis.__JB_STB={snap:null,sig:"",ts:0,map:new Map()})),L=new Set();for(let _e of ae.values()){if(_e&&ee(_e)){he.push(_e);L.add(_e.sessionId);Z.map.set(_e.sessionId,_e)}}if(!Z.ld){Z.ld=!0;try{const rw=localStorage.getItem("__JB_SESS");if(rw){const ar=JSON.parse(rw);for(const so of ar){so&&so.sessionId&&Z.map.set(so.sessionId,so)}}}catch(_){}}for(let[k_,v_]of Z.map){!L.has(k_)&&ee(v_)&&he.push(v_)}try{if(!Z.pAt||Date.now()-Z.pAt>60000){Z.pAt=Date.now();const pa=[];let pc=0;for(const[,pv]of Z.map){pa.push(pv);if(++pc>=400)break}localStorage.setItem("__JB_SESS",JSON.stringify(pa))}}catch(_){}let sg_=he.map(x=>x.sessionId).join("|"),now_=Date.now();if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=he;Z.sig=sg_;Z.ts=now_}return Z.snap',
+# 历史版本生成过的包装文本（仅用于迁移识别）
+LEGACY_V110 = {
+    "chat": b'let e=tfe(f),t=[],Z=(globalThis.__JB_STB||(globalThis.__JB_STB={snap:null,sig:"",ts:0}));for(let r of e.values()){if(r&&C(r))t.push(r)}try{const __ph=(globalThis.__JB_STB||{}).map,__ps=localStorage.getItem("__JB_SESS");if(__ph&&__ph.clear)__ph.clear();if(__ps)localStorage.removeItem("__JB_SESS")}catch(_){}let sg_=t.map(x=>x.sessionId).join("|"),now_=Date.now();if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=t;Z.sig=sg_;Z.ts=now_}return Z.snap',
+    "main": b'let ae=QYn(X),he=[],Z=(globalThis.__JB_STB||(globalThis.__JB_STB={snap:null,sig:"",ts:0}));for(let _e of ae.values()){if(_e&&ee(_e))he.push(_e)}try{const __ph=(globalThis.__JB_STB||{}).map,__ps=localStorage.getItem("__JB_SESS");if(__ph&&__ph.clear)__ph.clear();if(__ps)localStorage.removeItem("__JB_SESS")}catch(_){}let sg_=he.map(x=>x.sessionId).join("|"),now_=Date.now();if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=he;Z.sig=sg_;Z.ts=now_}return Z.snap',
+}
+LEGACY_V100 = {
+    "chat": b'let e=tfe(f),t=[],Z=(globalThis.__JB_STB||(globalThis.__JB_STB={snap:null,sig:"",ts:0,map:new Map()})),L=new Set();for(let r of e.values()){if(r&&C(r)){t.push(r);L.add(r.sessionId);Z.map.set(r.sessionId,r)}}if(!Z.ld){Z.ld=!0;try{const rw=localStorage.getItem("__JB_SESS");if(rw){const ar=JSON.parse(rw);for(const so of ar){so&&so.sessionId&&Z.map.set(so.sessionId,so)}}}catch(_){}}for(let[k_,v_]of Z.map){!L.has(k_)&&C(v_)&&t.push(v_)}try{if(!Z.pAt||Date.now()-Z.pAt>60000){Z.pAt=Date.now();const pa=[];let pc=0;for(const[,pv]of Z.map){pa.push(pv);if(++pc>=400)break}localStorage.setItem("__JB_SESS",JSON.stringify(pa))}}catch(_){}let sg_=t.map(x=>x.sessionId).join("|"),now_=Date.now();if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=t;Z.sig=sg_;Z.ts=now_}return Z.snap',
+    "main": b'let ae=QYn(X),he=[],Z=(globalThis.__JB_STB||(globalThis.__JB_STB={snap:null,sig:"",ts:0,map:new Map()})),L=new Set();for(let _e of ae.values()){if(_e&&ee(_e)){he.push(_e);L.add(_e.sessionId);Z.map.set(_e.sessionId,_e)}}if(!Z.ld){Z.ld=!0;try{const rw=localStorage.getItem("__JB_SESS");if(rw){const ar=JSON.parse(rw);for(const so of ar){so&&so.sessionId&&Z.map.set(so.sessionId,so)}}}catch(_){}}for(let[k_,v_]of Z.map){!L.has(k_)&&ee(v_)&&he.push(v_)}try{if(!Z.pAt||Date.now()-Z.pAt>60000){Z.pAt=Date.now();const pa=[];let pc=0;for(const[,pv]of Z.map){pa.push(pv);if(++pc>=400)break}localStorage.setItem("__JB_SESS",JSON.stringify(pa))}}catch(_){}let sg_=he.map(x=>x.sessionId).join("|"),now_=Date.now();if(!Z.snap||(sg_!==Z.sig&&now_-Z.ts>45000)){Z.snap=he;Z.sig=sg_;Z.ts=now_}return Z.snap',
 }
 
 
 def _sidebar_candidates(key: str) -> list[tuple[bytes, bytes]]:
-    """返回 (锚点, 新文本) 候选。锚点按特异性从高到低：
-    1) 历史版本的粘性缓存实现（迁移用）
-    2) 已改成"整库遍历"的中间态
-    3) 干净的上游实现
-    """
+    """(锚点, 新文本) 候选，按特异性从高到低。"""
     decl, arr, _keep, up, sw = _VARIANTS[key]
     suffix = "return " + arr
     new = _wrapper(key)
     cands = []
-    legacy = LEGACY_WRAPPERS.get(key)
-    if legacy:
-        cands.append((legacy, new))
-    cands.append(((decl + sw + suffix).encode("utf-8"), new))
-    cands.append(((decl + up + suffix).encode("utf-8"), new))
+    for legacy in (LEGACY_V110.get(key), LEGACY_V100.get(key)):
+        if legacy and legacy != new:
+            cands.append((legacy, new))
+    cands.append(((decl + sw + suffix).encode("utf-8"), new))   # 中间态：整库遍历
+    cands.append(((decl + up + suffix).encode("utf-8"), new))   # 上游实现
     return cands
-
-
-# ---------------------------------------------------------------- 补丁 1：侧栏数据源
-
-SIDEBAR_DETECT = b'localStorage.removeItem("__JB_SESS")'   # 仅新版本具备（含旧缓存清理）
 
 
 def _mk_targets(detect_of, cands_of) -> list[dict]:
@@ -95,9 +101,15 @@ SIDEBAR_TARGETS = _mk_targets(lambda k: SIDEBAR_DETECT, _sidebar_candidates)
 
 # ---------------------------------------------------------------- 补丁 2：噪音行
 
+def _noise_new(key: str) -> bytes:
+    v = b"e" if key == "chat" else b"ae"
+    return b'&&(' + v + b'.title||' + v + b'.summary||' + v + b'._meta?.["cognition.ai/userMessageCount"]>0)'
+
+
 def _noise_detect(key: str) -> bytes:
     """detect 必须精确到"追加的判定后缀"，否则应用自身代码里的同名字段会造成误判。"""
     return _noise_new(key)[1:]          # 去掉开头的 '&'
+
 
 NOISE_OLD_CHAIN = {
     "chat": (b'&&e._meta?.["cognition.ai/isArchived"]!==!0&&(0,eo9.getProposedByDevinId)(e._meta)===void 0'
@@ -111,14 +123,8 @@ NOISE_OLD_PRISTINE = {"chat": b'h(e.providerId)&&!(e.arenaId&&!0!==e.isArenaRep)
                       "main": b'j(ae.providerId)&&!(ae.arenaId&&ae.isArenaRep!==!0)'}
 
 
-def _noise_new(key: str) -> bytes:
-    v = b"e" if key == "chat" else b"ae"
-    return b'&&(' + v + b'.title||' + v + b'.summary||' + v + b'._meta?.["cognition.ai/userMessageCount"]>0)'
-
-
 def _noise_candidates(key: str) -> list[tuple[bytes, bytes]]:
-    keep = b"h(e.providerId)&&!(e.arenaId&&!0!==e.isArenaRep)" if key == "chat" \
-        else b"j(ae.providerId)&&!(ae.arenaId&&ae.isArenaRep!==!0)"
+    keep = NOISE_OLD_PRISTINE[key]
     return [
         (NOISE_OLD_CHAIN[key], _noise_new(key)),
         (NOISE_OLD_LABEL[key], _noise_new(key)),
@@ -164,8 +170,12 @@ def repair_residue(data: bytes) -> tuple[bool, bytes, str]:
     return True, data[:bound + 1] + data[m.end():], f"removed {removed} bytes"
 
 
+# 兼容旧引用
+LEGACY_WRAPPERS = dict(LEGACY_V110)
+LEGACY_WRAPPERS.update(LEGACY_V100)
+
 PATCHES = [
-    {"id": "sidebar", "title": "侧栏会话数据源：全量 + 粘性快照（开局即全量、不闪不倒退）",
+    {"id": "sidebar", "title": "侧栏会话数据源：只用 store 现值（归档/删除立即生效）",
      "targets": SIDEBAR_TARGETS},
     {"id": "noise", "title": "隐藏空会话噪音行（无标题且无消息 → 不渲染）",
      "targets": NOISE_TARGETS},

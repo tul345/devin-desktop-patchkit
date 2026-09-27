@@ -24,16 +24,44 @@ def test_sidebar_applies_on_pristine():
         assert hit, f"{key}: 未命中锚点"
         assert b"__JB_STB" in hit
         assert b"=[];," not in hit, "声明前缀多余分号（会写出语法错误）"
-        assert hit.endswith(b"return Z.snap")
+        assert hit.endswith(("return " + arr).encode())
         assert PT._wrapper(key) in hit
-        # 关键回归：不得再引入"会让归档/删除复活的"粘性缓存
+        # 关键回归 1：不得引入"会让归档/删除复活的"粘性缓存
         assert b"Z.map" not in hit, "不得缓存会话对象（会导致归档/删除无效）"
+        # 关键回归 2：不得引入"会返回过期列表的"节流快照
+        assert b"Z.snap" not in hit, "不得节流返回旧快照（首帧空列表会被永久缓存 → 侧栏空白）"
+        assert b"45000" not in hit, "不得按时间节流（memo 依赖不变时永不重算）"
         assert b"removeItem" in hit, "必须清理旧版本的持久化快照"
 
 
+def test_sidebar_migrates_v110_throttle_wrapper():
+    """v1.1.0（节流快照，会导致侧栏空白）必须能被迁移。"""
+    for key, legacy in PT.LEGACY_V110.items():
+        blob = b"x;" + legacy + b";y"
+        hit = None
+        for old, new in PT._sidebar_candidates(key):
+            ok, out, _why = replace_once(blob, old, new)
+            if ok:
+                hit = out
+                break
+        assert hit, f"{key}: v1.1.0 未命中"
+        assert b"Z.snap" not in hit
+        assert PT.SIDEBAR_DETECT in hit
+
+
+def test_sidebar_returns_live_store_values():
+    """语义回归：store 变化必须立刻反映到返回值（不缓存、不节流）。"""
+    import re as _re
+    w = PT._wrapper("chat").decode()
+    assert "for(let r of e.values())" in w, "必须每帧遍历当前 store"
+    assert "return t" in w
+    assert "if(" not in w.split("return t")[0].split("e.values()){")[1][:200].replace("if(r&&C(r))", ""), \
+        "遍历后不应再有条件缓存分支"
+
+
 def test_sidebar_migrates_legacy_sticky_wrapper():
-    """线上历史版本（带 Z.map 粘性缓存）必须能被识别并迁移掉。"""
-    for key, legacy in PT.LEGACY_WRAPPERS.items():
+    """v1.0.0（粘性缓存，会导致归档/删除失效）必须能被迁移。"""
+    for key, legacy in PT.LEGACY_V100.items():
         blob = b"x;" + legacy + b";y"
         hit = None
         for old, new in PT._sidebar_candidates(key):
